@@ -43,26 +43,27 @@ production_price_tes = production_price  # Example
 # ----- Variables ----- # 
 
 model.power_generation       = pyo.Var(hours, within=pyo.NonNegativeReals) # power generation in each hour
-model.power_generation_state = pyo.Var(hours, within=pyo.Binary)          # power generation state in each hour
+model.power_generation_state = pyo.Var(hours, within=pyo.Binary)           # power generation state in each hour
 model.power_generation_tes   = pyo.Var(hours, within=pyo.NonNegativeReals) # power generation for TES in each hour
 model.inflow_tes             = pyo.Var(hours, within=pyo.NonNegativeReals) # inflow to TES in each hour
+model.inflow_tes_state       = pyo.Var(hours, within=pyo.Binary)           # inflow to TES state in each hour
 model.fuel_tes               = pyo.Var(hours, within=pyo.NonNegativeReals) # fuel level in TES in each hour
 
 
 # ----- Objective function: Maximize the surplus (profit) ----- #
-
+"""
 def objective_rule(model):
     return sum((power_prices[hour] - production_price) * (model.power_generation[hour]) for hour in hours) #  + model.power_generation_tes[hour]
 
 model.objective = pyo.Objective(rule=objective_rule, sense=pyo.maximize)
-
-
 """
+
+
 def objective_rule(model):
     return sum((power_prices[hour]) * (model.power_generation[hour] + model.power_generation_tes[hour]) - (production_price) * (model.power_generation[hour] - model.inflow_tes[hour]) for hour in hours)
 
 model.objective = pyo.Objective(rule=objective_rule, sense=pyo.maximize)
-"""
+
 
 # ----- Generation constraints ----- #
 
@@ -89,14 +90,14 @@ def production_ramping_up(model, hour):
     if hour == 1:
         return pyo.Constraint.Skip
     else:
-        return (model.power_generation[hour]) - (model.power_generation[hour - 1]) <= gen_maxramp#(model.power_generation[hour] + model.power_generation_tes[hour]) - (model.power_generation[hour - 1] + model.power_generation_tes[hour - 1]) <= gen_maxramp
+        return (model.power_generation[hour] + model.power_generation_tes[hour]) - (model.power_generation[hour - 1] + model.power_generation_tes[hour - 1]) <= gen_maxramp #(model.power_generation[hour]) - (model.power_generation[hour - 1]) <= gen_maxramp
 model.prod_rampup = pyo.Constraint(hours, rule=production_ramping_up)
 
 def production_ramping_down(model, hour):
     if hour == 1:
         return pyo.Constraint.Skip
     else:
-        return gen_lowramp <= (model.power_generation[hour]) - (model.power_generation[hour - 1]) #gen_lowramp <= (model.power_generation[hour] + model.power_generation_tes[hour]) - (model.power_generation[hour - 1] + model.power_generation_tes[hour - 1])
+        return gen_lowramp <= (model.power_generation[hour] + model.power_generation_tes[hour]) - (model.power_generation[hour - 1] + model.power_generation_tes[hour - 1]) #gen_lowramp <= (model.power_generation[hour]) - (model.power_generation[hour - 1]) 
 model.prod_rampdown = pyo.Constraint(hours, rule=production_ramping_down)
 
 
@@ -111,12 +112,12 @@ model.tes_energy_bal = pyo.Constraint(hours, rule=tes_balance)
 
 
 # ----- TES inflow in/out constraint ----- # 
-
+"""
 def tes_inflow(model, hour):
     if model.power_generation_state[hour]: # and gen_active = true
         return model.inflow_tes[hour] == 0 # [MWh]
 model.tes_inflow = pyo.Constraint(hours, rule=tes_inflow)
-
+"""
 
 # %%
 """
@@ -124,23 +125,61 @@ model.tes_inflow = pyo.Constraint(hours, rule=tes_inflow)
 def is_positive_constraint_rule(model, hour):
     return model.power_generation_state[hour] == (model.power_generation[hour] > 0)
 
-model.is_positive_constraint = pyo.Constraint(model.hours, rule=is_positive_constraint_rule)
+model.is_positive_constraint = pyo.Constraint(hours, rule=is_positive_constraint_rule)
 
 # Define the constraint using is_positive
 def tes_inflow_constraint_rule(model, hour):
     return model.inflow_tes[hour] <= (1 - model.power_generation_state[hour]) * 0
 
-model.tes_inflow_constraint = pyo.Constraint(model.hours, rule=tes_inflow_constraint_rule)
-"""
+model.tes_inflow_constraint = pyo.Constraint(hours, rule=tes_inflow_constraint_rule)
+
+
+
 M = 10**6
 # Constraint to link bin_var with x
 def binary_constraint_rule(hour, model):
     return model.power_generation[hour] <= model.power_generation_state[hour] * M  # M is a big-M constant
 
-model.binary_constraint = pyo.Constraint(model.hours, rule=binary_constraint_rule)
+model.binary_constraint = pyo.Constraint(hours, rule=binary_constraint_rule)
+"""
+
+# ----- TES inflow constraint based on power generation state ----- #
+
+# Define a big-M constant
+M = 10**6
+
+# Constraint to link binary variable with power generation
+def binary_constraint_rule(model, hour):
+    return model.power_generation[hour] <= model.power_generation_state[hour] * M
+
+model.binary_constraint = pyo.Constraint(hours, rule=binary_constraint_rule)
+
+# TES inflow constraint
+def tes_inflow_constraint_rule(model, hour):
+    # Use binary variable to control the inflow
+    return model.inflow_tes[hour] <= (1 - model.power_generation_state[hour]) * M
+
+model.tes_inflow_constraint = pyo.Constraint(hours, rule=tes_inflow_constraint_rule)
+
+
+# ----- TES outflow constraint based on inflow state ----- #
+
+# Constraint to link binary variable with inflow
+def binary_constraint_rule2(model, hour):
+    return model.inflow_tes[hour] <= model.inflow_tes_state[hour] * M
+
+model.binary_constraint2 = pyo.Constraint(hours, rule=binary_constraint_rule2)
+
+# TES inflow constraint
+def tes_outflow_constraint_rule(model, hour):
+    # Use binary variable to control the inflow
+    return model.power_generation_tes[hour] <= (1 - model.inflow_tes_state[hour]) * M
+
+model.tes_outflow_constraint = pyo.Constraint(hours, rule=tes_outflow_constraint_rule)
+
 # %%
 
-"""
+
 # ----- TES inflow limit constraints ----- #
 
 # Defining TES inflow limits 
@@ -155,7 +194,7 @@ def tes_inflow_limit_lower(model, hour):
     return inflow_lowcap <= model.inflow_tes[hour]
 model.tesin_limlow = pyo.Constraint(hours, rule=tes_inflow_limit_lower)
 
-
+"""
 # ----- TES production constraints ----- #
 
 def tes_production(model, hour):
@@ -163,6 +202,7 @@ def tes_production(model, hour):
         return model.power_generation_tes[hour] == 0
 model.tes_prod = pyo.Constraint(hours, rule=tes_production)
 
+"""
 
 # ----- TES production limit constraints ----- #
 
@@ -192,7 +232,7 @@ def tes_cap_lower(model, hour):
     return tes_lowcap <= model.fuel_tes[hour]
 model.tes_low_cap = pyo.Constraint(hours, rule=tes_cap_lower)
 
-"""
+
 # ----- Solving the optimization problem ----- #
 
 solver = pyo.SolverFactory('gurobi')
