@@ -4,24 +4,60 @@ Created on Wed Sep 27 10:58:33 2023
 
 @author: agrot
 
-Version 2.0 of the project thesis optimization problem code
+Version 2.1 of the project thesis optimization problem code
 - implementing TES (big M)
 """
+
+# %% ----- Interchangeable data - User Interface ----- #
+
+# Define the set of hours in the year (step1 = 1, tf = 8760)
+# or define time interval to be examined
+step1 = 0
+tf = 2030 #rt = 2m40s with 745, =5m20s with 1417 (jan & feb)
+
+# Defining power production limits 
+gen_maxcap = 300
+gen_lowcap = 0
+
+# Production price (cost) in NOK/MWh (marginal cost)
+production_price = 100.0  # Example, will be lower
+production_price_tes = production_price  # Example
+
+# Defining ramping limits 
+lower_ramp_lim = -5 #[%/min]
+upper_ramp_lim = 5
+
+
+# --- TES --- #
+
+# Defining TES inflow limits 
+inflow_maxcap = 300 #[MW]
+inflow_lowcap = 0
+
+# Defining TES outflow limits 
+outflow_maxcap = 300 #[MW]
+outflow_lowcap = 0
+
+# Defining TES capacity
+tes_maxcap = 1500 #[MWh]
+tes_lowcap = 0
+
+
+# %% ----- Dependencies ----- #
 
 import pyomo.environ as pyo
 from pyomo.opt import SolverFactory
 import matplotlib.pyplot as plt
 import pandas as pd
 
+
+# %% ----- Model setup ----- #
+
 # Create a concrete Pyomo model
 model = pyo.ConcreteModel()
 
-# Define the set of hours in the year
-timeframe = 745
-hours = range(1, timeframe + 1)  # Assuming there are 8760 hours in a year (8761, one month: 745)
-
-# Power prices for each hour in dollars per MWh
-#power_prices = [10.0, 12.0, 15.0, 13.0, 11.0] #Example
+# List for hour range to be examined
+hours = range(step1, tf + 1)  # Assuming there are 8760 hours in a year (8761, one month: 745)
 
 
 # %% ----- Reading in data ----- #
@@ -35,11 +71,6 @@ def InputData(data_file): #reading the excel file with the values of generation 
 power_prices = InputData('Power prices 8760 1.0.xlsx')
 
 
-# Production price (cost) in NOK/MWh
-production_price = 150.0  # Example, will be lower
-production_price_tes = production_price  # Example
-
-
 # %% ----- Variables ----- # 
 
 model.power_generation       = pyo.Var(hours, within=pyo.NonNegativeReals) # power generation in each hour
@@ -50,7 +81,7 @@ model.inflow_tes_state       = pyo.Var(hours, within=pyo.Binary)           # inf
 model.fuel_tes               = pyo.Var(hours, within=pyo.NonNegativeReals) # fuel level in TES in each hour
 
 
-# %% ----- Objective function: Maximize the surplus (profit) ----- #
+# %% ----- Objective Function: Maximize the surplus (profit) ----- #
 
 def objective_rule(model):
     return sum((power_prices[hour]) * (model.power_generation[hour] + model.power_generation_tes[hour]) - (production_price) * (model.power_generation[hour] + model.inflow_tes[hour]) for hour in hours)
@@ -58,11 +89,7 @@ def objective_rule(model):
 model.objective = pyo.Objective(rule=objective_rule, sense=pyo.maximize)
 
 
-# %% ----- Generation constraints ----- #
-
-# Defining power production limits 
-gen_maxcap = 300
-gen_lowcap = 0
+# %% ----- Generation Constraints ----- #
 
 def production_limit_upper(model, hour):
     return model.power_generation[hour] <= gen_maxcap
@@ -73,24 +100,25 @@ def production_limit_lower(model, hour):
 model.prod_limlow = pyo.Constraint(hours, rule=production_limit_lower)
 
 
-# %% ----- Ramping constraints ----- #
+# %% ----- Ramping Constraints ----- #
 
-# Defining ramping limits 
-gen_lowramp = -20 #[MW/h]
-gen_maxramp = 20
+
+# Converting ramping limits 
+gen_lowramp = lower_ramp_lim * 0.6 * gen_maxcap #[MW/h]
+gen_maxramp = upper_ramp_lim * 0.6 * gen_maxcap
 
 def production_ramping_up(model, hour):
-    if hour == 1:
+    if hour == step1:
         return pyo.Constraint.Skip
     else:
-        return (model.power_generation[hour]) - (model.power_generation[hour - 1]) <= gen_maxramp #(model.power_generation[hour] + model.power_generation_tes[hour]) - (model.power_generation[hour - 1] + model.power_generation_tes[hour - 1]) <= gen_maxramp #(model.power_generation[hour]) - (model.power_generation[hour - 1]) <= gen_maxramp
+        return (model.power_generation[hour]) - (model.power_generation[hour - 1]) <= gen_maxramp #(model.power_generation[hour] + model.power_generation_tes[hour]) - (model.power_generation[hour - 1] + model.power_generation_tes[hour - 1]) <= gen_maxramp 
 model.prod_rampup = pyo.Constraint(hours, rule=production_ramping_up)
 
 def production_ramping_down(model, hour):
-    if hour == 1:
+    if hour == step1:
         return pyo.Constraint.Skip
     else:
-        return gen_lowramp <= (model.power_generation[hour]) - (model.power_generation[hour - 1]) #gen_lowramp <= (model.power_generation[hour] + model.power_generation_tes[hour]) - (model.power_generation[hour - 1] + model.power_generation_tes[hour - 1])  
+        return gen_lowramp <= (model.power_generation[hour]) - (model.power_generation[hour - 1]) # gen_lowramp <= (model.power_generation[hour] + model.power_generation_tes[hour]) - (model.power_generation[hour - 1] + model.power_generation_tes[hour - 1])
 model.prod_rampdown = pyo.Constraint(hours, rule=production_ramping_down)
 
 
@@ -101,31 +129,31 @@ tes_lowramp = gen_lowramp #[MW/h]
 tes_maxramp = gen_maxramp
 
 def tes_ramping_up(model, hour):
-    if hour == 1:
+    if hour == step1:
         return pyo.Constraint.Skip
     else:
         return (model.power_generation_tes[hour]) - (model.power_generation_tes[hour - 1]) <= tes_maxramp 
 model.tes_rampup = pyo.Constraint(hours, rule=tes_ramping_up)
 
 def tes_ramping_down(model, hour):
-    if hour == 1:
+    if hour == step1:
         return pyo.Constraint.Skip
     else:
         return tes_lowramp <= (model.power_generation_tes[hour]) - (model.power_generation_tes[hour - 1]) 
 model.tes_rampdown = pyo.Constraint(hours, rule=tes_ramping_down)
 
 
-# %% ----- TES energy balance constraint ----- #
+# %% ----- TES Energy Balance Constraint ----- #
 
 def tes_balance(model, hour): 
-    if hour ==1:
+    if hour == step1:
         return model.fuel_tes[hour] == 0
     else:
         return model.fuel_tes[hour] == model.fuel_tes[hour - 1] + model.inflow_tes[hour - 1] - model.power_generation_tes[hour - 1]
 model.tes_energy_bal = pyo.Constraint(hours, rule=tes_balance)
 
 
-# %% ----- TES Flow constraints using big M ----- #
+# %% ----- TES Flow Constraints using big M ----- #
 
 M = 10**4
 
@@ -158,11 +186,7 @@ model.flow_constraint2 = pyo.Constraint(hours, rule=flow_const2)
 
 
 
-# %% ----- TES inflow limit constraints ----- #
-
-# Defining TES inflow limits 
-inflow_maxcap = 300
-inflow_lowcap = 0
+# %% ----- TES Inflow Limit Constraints ----- #
 
 def tes_inflow_limit_upper(model, hour):
     return model.inflow_tes[hour] <= inflow_maxcap
@@ -175,10 +199,6 @@ model.tesin_limlow = pyo.Constraint(hours, rule=tes_inflow_limit_lower)
 
 # ----- TES production limit constraints ----- #
 
-# Defining TES inflow limits 
-outflow_maxcap = 300
-outflow_lowcap = 0
-
 def tes_outflow_limit_upper(model, hour):
     return model.power_generation_tes[hour] <= outflow_maxcap
 model.tesout_limup = pyo.Constraint(hours, rule=tes_outflow_limit_upper)
@@ -188,10 +208,7 @@ def tes_outflow_limit_lower(model, hour):
 model.tesout_limlow = pyo.Constraint(hours, rule=tes_outflow_limit_lower)
 
 
-# %% ----- TES capacity constraint ----- #
-
-tes_maxcap = 1500 # [MWh]
-tes_lowcap = 0
+# %% ----- TES Capacity Constraint ----- #
 
 def tes_cap_upper(model, hour):
     return model.fuel_tes[hour] <= tes_maxcap
@@ -212,9 +229,9 @@ opt = SolverFactory('gurobi')
 
 opt.solve(model)
 
-# Print the results
+# %% ----- Printing and plotting results ----- #
 
-#print("Optimal Surplus: ", pyo.value(model.objective))
+print("Optimal Surplus: ", pyo.value(model.objective), "NOK")
 #print("Optimal Power Generation:")
 #for hour in hours:
 #    print(f"Hour {hour}: {pyo.value(model.power_generation[hour])} MWh")
@@ -232,10 +249,6 @@ jan= 744 #, mar, may, jul, aug, okt, dec
 apr= 720 #, jun, sep, nov
 feb= 672
 
-yo = timeframe
-
-#print("boom")
-
 #plt.figure().set_figwidth(15)
 #plt.figure(figsize=(20,6))
 
@@ -244,7 +257,7 @@ fig, ax1 = plt.subplots()
 
 ax1.set_xlabel("Hours")
 ax1.set_ylabel("Generation output [MW]")
-ax1.bar(hourslist[:yo], val_gen[:yo], color = 'r')
+ax1.bar(hourslist[:tf - step1], val_gen[:tf - step1], color = 'r')
 #ax1.bar(hourslist[:744], val_tes[:744], color = 'g')
 #ax1.tick_params(axis ='y', labelcolor = color)
  
@@ -252,7 +265,7 @@ ax1.bar(hourslist[:yo], val_gen[:yo], color = 'r')
 ax2 = ax1.twinx()
  
 ax2.set_ylabel('Power prices [NOK/MWh]')
-ax2.plot(hourslist[:yo], power_prices[:yo], color = 'b') #[:timeframe - 1]
+ax2.plot(hourslist[:tf - step1], power_prices[step1:tf], color = 'b') #[:timeframe - 1]
 #ax2.tick_params(axis ='y', labelcolor = color)
 
 plt.title("Generation profile of NPP")
@@ -265,7 +278,7 @@ fig, ax3 = plt.subplots()
 
 ax3.set_xlabel("Hours")
 ax3.set_ylabel("TES Generation output [MW]")
-ax3.bar(hourslist[:yo], val_tes[:yo], color = 'g')
+ax3.bar(hourslist[:tf - step1], val_tes[:tf - step1], color = 'g')
 #ax1.bar(hourslist[:744], val_tes[:744], color = 'g')
 #ax1.tick_params(axis ='y', labelcolor = color)
  
@@ -273,7 +286,7 @@ ax3.bar(hourslist[:yo], val_tes[:yo], color = 'g')
 ax4 = ax3.twinx()
  
 ax4.set_ylabel('Power prices [NOK/MWh]')
-ax4.plot(hourslist[:yo], power_prices[:yo], color = 'b') #[:timeframe - 1]
+ax4.plot(hourslist[:tf - step1], power_prices[step1:tf], color = 'b') #[:timeframe - 1]
 #ax2.tick_params(axis ='y', labelcolor = color)
 
 plt.title("Generation profile of NPP TES")
@@ -285,7 +298,7 @@ fig, inf = plt.subplots()
 
 inf.set_xlabel("Hours")
 inf.set_ylabel("TES Inflow [MWh]")
-inf.bar(hourslist[:yo], val_inflow[:yo], color = 'y')
+inf.bar(hourslist[:tf - step1], val_inflow[:tf - step1], color = 'y')
 #ax1.bar(hourslist[:744], val_tes[:744], color = 'g')
 #ax1.tick_params(axis ='y', labelcolor = color)
  
@@ -293,7 +306,7 @@ inf.bar(hourslist[:yo], val_inflow[:yo], color = 'y')
 inf2 = inf.twinx()
  
 inf2.set_ylabel('Power prices [NOK/MWh]')
-inf2.plot(hourslist[:yo], power_prices[:yo], color = 'b') #[:timeframe - 1]
+inf2.plot(hourslist[:tf - step1], power_prices[step1:tf], color = 'b') #[:timeframe - 1]
 #ax2.tick_params(axis ='y', labelcolor = color)
 
 plt.title("Inflow profile to TES")
@@ -305,7 +318,7 @@ fig, cap = plt.subplots()
 
 cap.set_xlabel("Hours")
 cap.set_ylabel("TES Capacity [MWh]")
-cap.bar(hourslist[:yo], val_capacity[:yo], color = 'k')
+cap.bar(hourslist[:tf - step1], val_capacity[:tf - step1], color = 'k')
 #ax1.bar(hourslist[:744], val_tes[:744], color = 'g')
 #ax1.tick_params(axis ='y', labelcolor = color)
  
@@ -313,9 +326,8 @@ cap.bar(hourslist[:yo], val_capacity[:yo], color = 'k')
 cap2 = cap.twinx()
  
 cap2.set_ylabel('Power prices [NOK/MWh]')
-cap2.plot(hourslist[:yo], power_prices[:yo], color = 'b') #[:timeframe - 1]
+cap2.plot(hourslist[:tf - step1], power_prices[step1:tf], color = 'b') #[:timeframe - 1]
 #ax2.tick_params(axis ='y', labelcolor = color)
 
 plt.title("Capacity profile of TES")
 plt.show()
-
